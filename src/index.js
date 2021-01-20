@@ -15,20 +15,34 @@ const readFilePromise = function(f) {
   });
 };
 
-const defaultTransform = function(files, type) {
-  let output = '' +
-    'const atob = require("rollup-plugin-data-files/src/atob");\n' +
-    'const strToUint8 = require("rollup-plugin-data-files/src/str-to-uint8");\n' +
-    'module.exports = {\n';
+const defaultTransform = function(files, type, extensions) {
+  let output = '';
 
-  files.forEach(function({filepath, contents}) {
-    output += `'${path.basename(filepath)}': () => `;
-    const base64 = `atob('${Buffer.from(contents).toString('base64')}')`;
+  if (type === 'js') {
+    files.forEach(function({filepath, contents}, i) {
+      output += `const dataFile${i} = require("${path.resolve(filepath)}");\n`;
+    });
+  }
+
+  if (type === 'binary') {
+    output +=
+      'const atob = require("rollup-plugin-data-files/src/atob");\n' +
+      'const strToUint8 = require("rollup-plugin-data-files/src/str-to-uint8");\n';
+  }
+
+  output += 'module.exports = {\n';
+
+  files.forEach(function({filepath, contents}, i) {
+    output += `'${path.basename(filepath, !extensions ? path.extname(filepath) : '')}': () => `;
 
     if (type === 'string') {
-      output += base64;
-    } else if (type === 'binary' || !type) {
-      output += `strToUint8(${base64})`;
+      output += `unescape('${escape(contents.toString())}')`;
+    } else if (type === 'json') {
+      output += `JSON.parse('${JSON.stringify(contents.toString())}'})`;
+    } else if (type === 'binary') {
+      output += `strToUint8(atob('${contents.toString('base64')}'))`;
+    } else if (type === 'js') {
+      output += `require('${path.resolve(filepath)}')`;
     }
 
     output += ',\n';
@@ -45,7 +59,7 @@ module.exports = function(keys) {
   const keyConf = {};
 
   Object.keys(keys).forEach(function(key) {
-    keyConf[key + '.js'] = Object.assign({}, keys[key]);
+    keyConf[key + '.js'] = Object.assign({extensions: true, transform: 'binary'}, keys[key]);
     keyConf[key + '.js'].originalKey = key;
   });
   return {
@@ -71,7 +85,13 @@ module.exports = function(keys) {
 
       const key = getKey(id);
 
-      const {transform, include, exclude, originalKey} = keyConf[key];
+      const {
+        transform,
+        include,
+        exclude,
+        originalKey,
+        extensions
+      } = keyConf[key];
       const filter = createFilter(include, exclude);
       const globs = Array.isArray(include) ? include : [include];
 
@@ -104,10 +124,10 @@ module.exports = function(keys) {
         return Promise.all(promises);
       }).then((files) => {
         if (typeof transform === 'function') {
-          return Promise.resolve(transform(files));
+          return Promise.resolve(transform(originalKey, files));
         }
 
-        return Promise.resolve(defaultTransform(files, transform));
+        return Promise.resolve(defaultTransform(files, transform, extensions));
       }).then((output) => {
         return Promise.resolve(`/* rollup-plugin-data-files start ${originalKey} */\n` +
           output + '\n' +
